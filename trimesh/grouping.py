@@ -305,8 +305,8 @@ def unique_bincount(values,
         # casting failed on 32 bit windows
         log.error('casting failed!', exc_info=True)
         # fall back to numpy unique
-        return np.unique(values, 
-                         return_inverse=return_inverse, 
+        return np.unique(values,
+                         return_inverse=return_inverse,
                          return_counts=return_counts)
 
     # which bins are occupied at all
@@ -330,6 +330,7 @@ def unique_bincount(values,
     if len(ret) == 1:
         return ret[0]
     return ret
+
 
 def merge_runs(data, digits=None):
     """
