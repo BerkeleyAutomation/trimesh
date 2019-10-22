@@ -50,10 +50,10 @@ def subdivide(vertices,
     # the (c,3) int set of vertex indices
     faces = faces[face_index]
     # the (c, 3, 3) float set of points in the triangles
-    triangles = vertices[faces]
+    tris = vertices[faces]
     # the 3 midpoints of each triangle edge
     # stacked to a (3 * c, 3) float
-    mid = np.vstack([triangles[:, g, :].mean(axis=1)
+    mid = np.vstack([tris[:, g, :].mean(axis=1)
                      for g in [[0, 1],
                                [1, 2],
                                [2, 0]]])
@@ -131,10 +131,10 @@ def subdivide_to_size(vertices,
     # loop through iteration cap
     for i in range(max_iter + 1):
         # (n, 3, 3) float triangle soup
-        triangles = current_vertices[current_faces]
+        tris = current_vertices[current_faces]
 
         # compute the length of every triangle edge
-        edge_lengths = (np.diff(triangles[:, [0, 1, 2, 0]],
+        edge_lengths = (np.diff(tris[:, [0, 1, 2, 0]],
                                 axis=1) ** 2).sum(axis=2) ** .5
         too_long = (edge_lengths > max_edge).any(axis=1)
 
@@ -170,13 +170,15 @@ def simplify(mesh, target_count, aggressiveness=7, max_iter=100):
     
     faces = np.copy(mesh.faces)
     vertices = np.copy(mesh.vertices)
+    tris = np.copy(mesh.triangles)
+    vert_faces = np.copy(mesh.vertex_faces)
     
     # First create quadrics for each triangle and calculate vertex quadrics from these
     tic = time.time()
     a = mesh.face_normals[:,0]
     b = mesh.face_normals[:,1]
     c = mesh.face_normals[:,2]
-    d = np.einsum('ij,ij->i', mesh.face_normals, mesh.triangles[:,0,:])
+    d = np.einsum('ij,ij->i', mesh.face_normals, tris[:,0,:])
     face_quadrics = np.array([a*a, a*b, a*c, a*d, b*b, b*c, b*d, c*c, c*d, d*d]).T
     vertex_quadrics = mesh.faces_sparse.dot(face_quadrics)
     log.debug('%s found in %.6f', "vertex_quadrics", time.time() - tic)
@@ -205,25 +207,31 @@ def simplify(mesh, target_count, aggressiveness=7, max_iter=100):
         # TODO: FIX THIS LINE. Probably want to update the face array in place without dumping all of the caches?
         # mesh.update_faces(face_mask)
         
-        refs = _find_mesh_refs(mesh)
-        dirty_faces = np.zeros(len(faces), dtype=np.bool_)
-        
         # threshold = (1e-9)*(i+3)**aggressiveness
         threshold = np.finfo(float).eps
 
         # Find all edges with error below threshold
         candidate_inds = np.where(edge_errors < threshold)
-        candidate_vert_inds = faces[candidate_inds]
-        candidate_rep_verts = optimal_vertices[candidate_inds]
+        candidate_vert_inds = np.stack((faces[candidate_inds],
+                                        faces[candidate_inds[0], (candidate_inds[1]+1)%3]))
+        candidate_rep_verts = np.repeat(optimal_vertices[candidate_inds][None,...], 2, axis=0)
 
         # Filter edges that have vertices on the boundary
-        candidate_edges = np.stack((faces[candidate_inds],
-                                    faces[candidate_inds[0], (candidate_inds[1]+1)%3]))
-        boundary_mask = boundary_vertices[candidate_edges]
+        boundary_mask = boundary_vertices[candidate_vert_inds]
         boundary_mask = np.logical_or(boundary_mask[0], boundary_mask[1])
-        candidate_vert_inds = candidate_vert_inds[~boundary_mask]
-        candidate_rep_verts = candidate_rep_verts[~boundary_mask]
+        candidate_vert_inds = candidate_vert_inds[:,~boundary_mask]
+        candidate_rep_verts = candidate_rep_verts[:,~boundary_mask,:]
         candidate_inds = (candidate_inds[0][~boundary_mask], candidate_inds[1][~boundary_mask])
+
+        # Find triangle normals that flip from replacing vertices
+        orig_tri_norms, orig_valid = triangles.normals(vertices[faces])
+        new_vertices = np.copy(vertices)
+        new_vertices[candidate_vert_inds.flatten()] = candidate_rep_verts.reshape((-1,3))
+        new_tri_norms, new_valid = triangles.normals(new_vertices[faces])
+        dots = np.ones(len(faces)) 
+        dots[new_valid] = np.einsum('ij,ij->i', orig_tri_norms[new_valid], new_tri_norms)
+        flipped_faces = np.where(dots <= 0)[0]
+                
 
         # TODO: Check whether replacing the vertex will result in the normal of the triangle flipping
         # pre_normals = triangles.cross(vertices[faces])
